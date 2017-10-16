@@ -1,42 +1,101 @@
+#include <ArduinoJson.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <WiFiUdp.h>
-#include <ArduinoOTA.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
+
+#include "ESC.h"
+#include "Preferences.h"
+#include "JetRotator.h"
+#include "Console.h"
+
 #define SIZE_OF_ARRAY(ary)  (sizeof(ary)/sizeof((ary)[0]))
+#define MATH_PI 3.14
+
+#define LED_R 26
+#define LED_G 27
+#define LED_B 32
+#define PUMP_PIN 14
+
 
 #define BNO055_SAMPLERATE_DELAY_MS (100)
-Adafruit_BNO055 bno = Adafruit_BNO055(55);
+Adafruit_BNO055 bno = Adafruit_BNO055();
 
+//const char* ssid = "Rockhopper";
+//const char* password = "abcdefgf";
 
-#define LEDC_CHANNEL_3 0
-#define LEDC_TIMER_16_BIT 16
-#define LEDC_SERVO_FREQ 50
-#define SERVO_MIN_WIDTH_MS 0.6
-#define SERVO_MAX_WIDTH_MS 1.6
+//const char* ssid =  "aterm-d97c15-g";
+//const char* password = "36bd0469b2900";
 
+const char* ssid = "W04_5001D9B04ECE";
+const char* password = "0y4tmqt2qmqyq3d";
 
-const char* ssid = "Rockhopper";
-const char* password = "abcdefgf";
+ESC esc;
+JetRotator jet_rotator;
+Console console;
 
-//ESC
-const uint8_t ESC_PIN = 25;
-const uint8_t CHANNEL_0 = 0;
-const uint8_t LEDC_TIMER_BIT = 8;   // Resolution: 8bit
-const uint8_t LEDC_BASE_FREQ = 50;  // Hz
-const uint8_t VALUE_MAX = 255;      // Max value of PWM
-const uint8_t MOTOR_STOP = 189;      // TODO: Should be tested
-const uint8_t MOTOR_MAX = 255;      // TODO: Should be tested
-uint8_t esc_speed = MOTOR_STOP;
+hw_timer_t* timer = NULL;
 
-//Jet rotation circuit
-const uint8_t ROTATION_CIRCUIT_ADDRESS = 8;
+void onConsoleCallback(String message);
 
-WiFiServer server(80);
+void IRAM_ATTR onTimer(){
+//  sensors_event_t event;
+//  bno.getEvent(&event);
+
+//  uint8_t sys, gyro, accel, mag = 0;
+//  bno.getCalibration(&sys, &gyro, &accel, &mag);
+//
+//  StaticJsonBuffer<1024> jsonBuffer;
+//  JsonObject& root = jsonBuffer.createObject();
+//  JsonArray& orientation = root.createNestedArray("data");
+//  orientation.add((float)event.orientation.x);
+//  orientation.add((float)event.orientation.y);
+//  orientation.add((float)event.orientation.z);
+//  JsonArray& calibration = root.createNestedArray("calibration");
+//  calibration.add(sys);
+//  calibration.add(gyro);
+//  calibration.add(accel);
+//  calibration.add(mag);
+
+//  float x = event.orientation.x;
+//  float y = event.orientation.y;
+//  float z = event.orientation.z;
+//
+//  float theta;
+//  if(y < 0 && z> 0) { //第一象限 (-, +)
+//    theta = MATH_PI / 2 * abs(z) / (abs(y) + abs(z));
+//  } else if(y > 0 && z > 0) { //第二象限 (+, +)
+//    theta = MATH_PI / 2 * (1 + abs(y) / (abs(y) + abs(z)));
+//  } else if(y > 0 && z < 0) {
+//    theta = MATH_PI / 2 * (2 + abs(z) / (abs(y) + abs(z)));
+//  } else if(y < 0 && z < 0) {
+//    theta = MATH_PI / 2 * (3 + abs(y) / (abs(y) + abs(z)));
+//  }
+//
+//  Serial.println("x=" + String(x) + "y=" + String(y) + "z=" + String(z) + "theta=" + String(theta));
+//
+//  
+//  root.set("Theta", theta);
+//  root.set("x", x);
+//
+//  String str;
+//  root.printTo(str);
+//  str += "\n";
+  //console.print(String(theta) + "\n");
+}
 
 void setup() {
+  /* Setup IO Pins */
+  pinMode(PUMP_PIN, OUTPUT);
+  
+  pinMode(LED_R, OUTPUT);
+  pinMode(LED_G, OUTPUT);
+  pinMode(LED_B, OUTPUT);
+
+
+
   Serial.begin(115200);
   Serial.println("Booting");
   WiFi.mode(WIFI_STA);
@@ -46,123 +105,60 @@ void setup() {
     delay(5000);
     ESP.restart();
   }
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH)
-      type = "sketch";
-    else // U_SPIFFS
-      type = "filesystem";
 
-    // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-    Serial.println("Start updating " + type);
-  });
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-    else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-    else if (error == OTA_END_ERROR) Serial.println("End Failed");
-  });
-  ArduinoOTA.begin();
   Serial.println("Ready");
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
-
-
+  
 /* Starting the console*/
-  server.begin();
-
-
-/* Pin setup */
-  pinMode(ESC_PIN, OUTPUT);
-
-/* Timer setup */
-  //ledcSetup(CHANNEL_0, 50, LEDC_TIMER_BIT);
-  //ledcAttachPin(ESC_PIN, CHANNEL_0);
-  //ledcWrite(CHANNEL_0, MOTOR_STOP);
-  delay(3000);  // Wait for initialize
-
-  ledcSetup(LEDC_CHANNEL_3, LEDC_SERVO_FREQ, LEDC_TIMER_16_BIT);
-  ledcAttachPin(ESC_PIN, LEDC_CHANNEL_3);
-  ledcWrite(LEDC_CHANNEL_3, servo_pwm_count(0));
-  delay(3000);  // Wait for initialize
+  console.begin();
+  console.setCallback(onConsoleCallback);
+  
+/* Setup ESC */
+  esc.begin();
 
 /* I2C setup */
-  Wire.begin();
+  jet_rotator.begin();
+
+
+/* Setup Timer for 9DoF sensor */
+  timer = timerBegin(1, 80, true);
+  timerAttachInterrupt(timer, &onTimer, true);
+  timerAlarmWrite(timer, 1000 * BNO055_SAMPLERATE_DELAY_MS, true); //Run in 100msec
+  timerAlarmEnable(timer);
 
   Serial.println("System started");
-}
 
 
-WiFiClient client;
-
-
-int servo_pwm_count(int v)
-{
-  float vv = (v + 90) / 180.0 ;
-  return (int)(65536 * (SERVO_MIN_WIDTH_MS + vv * (SERVO_MAX_WIDTH_MS - SERVO_MIN_WIDTH_MS)) / 20.0) ;
+  digitalWrite(LED_B, HIGH);
 }
 
 void loop() {
-  //ArduinoOTA.handle();
-  client = server.available();
-  serverRead(client);
-  //delay(5000);
-  //esc(50);
-  //delay(5000);
-  //esc(0);
+  console.check();
 }
 
-void esc(uint8_t s) {
-  //uint8_t next_speed = map(s, 0, 100, MOTOR_STOP, MOTOR_MAX);
-  //if(next_speed != esc_speed) {
-    Serial.println("Set motor speed = " + String(s));
-    serverSend(client, "Set motor speed = " + String(s));
-    //ledcWrite(CHANNEL_0, s);
-    ledcWrite(LEDC_CHANNEL_3, servo_pwm_count(s));
-    //esc_speed = next_speed;
-  //}
-}
+void onConsoleCallback(String message) {
+  char json[1024];
+  int len = message.length() + 1;
+  message.toCharArray(json, len);
+  StaticJsonBuffer<1024> jsonBuffer;
+  JsonObject& root = jsonBuffer.parseObject(json);
 
-void rotate(byte b) {
-  Serial.println("Set the direction to  = " + String(b));
-  serverSend(client, "Set the direction to  = " + String(b));
-  Wire.beginTransmission(ROTATION_CIRCUIT_ADDRESS);
-  Wire.write(b);
-  Wire.endTransmission();
-}
-
-String str;
-void serverRead(WiFiClient client) {
-  if(client) {
-    while(client.connected()) {
-      if(client.available()) {
-        char c = client.read();
-        if(c == '\n') {
-          Serial.println(str);
-          serverSend(client, str);
-          int power = str.toInt();
-          esc(power);
-          //byte b = (byte)power;
-          //rotate(b);
-          str = "";
-          break;
-        } else {
-          str += c; 
-        }
-      }
-    }
+  if(root.containsKey("esc")){
+    int power = root["esc"].as<int>();
+    esc.set(power);
+    Serial.print("Set esc power = " + String(power));
+  } else if(root.containsKey("jet")) {
+    int deg = root["jet"].as<int>();  
+    jet_rotator.set(deg);
+    Serial.print("Set jet deg = " + String(deg));
+  } else if(root.containsKey("pump")) {
+    pump();  
   }
 }
 
-void serverSend(WiFiClient client, String str) {  
-  client.println(str);
+void pump() {
+  digitalWrite(PUMP_PIN, !digitalRead(14));
 }
+
 
